@@ -77,7 +77,7 @@ verify_request(char *buf, ssize_t buflen) {
 }
 
 static int
-analyse_request_addr(struct socks5_request *req, struct sockaddr *dest, char *dest_buf, char *host) {
+analyse_request_addr(struct socks5_request *req, struct sockaddr *dest, char *dest_buf, char *host, int *host_is_ip) {
     union {
         struct sockaddr addr;
         struct sockaddr_in addr4;
@@ -109,11 +109,52 @@ analyse_request_addr(struct socks5_request *req, struct sockaddr *dest, char *de
         if (namelen > 0xFF) {
             return 0;
         }
-        memcpy(&addr.addr4.sin_port, req->addr + 1 + namelen, portlen);
-
         memcpy(dest_buf, req->addr + 1, namelen);
-        memcpy(host, req->addr + 1, namelen);
-        host[namelen] = '\0';
+
+        /* copy from 3proxy, test if host is ip */
+        int ndots=0, ncols=0, nhex=0;
+        int i;
+        for(i=0; dest_buf[i]; i++){
+            if(dest_buf[i] == '.'){
+                if(++ndots > 3) {
+                    break;
+                }
+            }
+            else if(dest_buf[i] == ':'){
+                if(++ncols > 7) {
+                    break;
+                }
+            }
+            else if(dest_buf[i] == '%' || (dest_buf[i] >= 'a' && dest_buf[i] <= 'f') || (dest_buf[i] >= 'A' && dest_buf[i] <= 'F')){
+                nhex++;
+            }
+            else if(dest_buf[i] <'0' || dest_buf[i] >'9') {
+                break;
+            }
+        }
+        if(!dest_buf[i]){
+            if(ndots == 3 && ncols == 0 && nhex == 0){
+                if (uv_inet_pton(AF_INET, dest_buf, &addr.addr4.sin_addr) == 0) {
+                    addr.addr4.sin_family = AF_INET;
+                    memcpy(&addr.addr4.sin_port, req->addr + 1 + namelen, portlen);
+                    *host_is_ip = 1;
+                }
+            }
+            if(ncols >= 2) {
+                if (uv_inet_pton(AF_INET6, dest_buf, &addr.addr6.sin6_addr) == 0) {
+                    addr.addr6.sin6_family = AF_INET6;
+                    memcpy(&addr.addr6.sin6_port, req->addr + 1 + namelen, portlen);
+                    *host_is_ip = 1;
+                }
+            }
+        }
+        
+        if (!*host_is_ip) {
+            memcpy(&addr.addr4.sin_port, req->addr + 1 + namelen, portlen);
+            memcpy(host, req->addr + 1, namelen);
+            host[namelen] = '\0';
+        }
+        
         uint16_t port = read_size((uint8_t*)(req->addr + 1 + namelen));
         sprintf(dest_buf, "%s:%u", dest_buf, port);
 
@@ -122,6 +163,7 @@ analyse_request_addr(struct socks5_request *req, struct sockaddr *dest, char *de
     } else if (req->atyp == S5_ATYP_IPV6) {
         /* 16 bytes for IPv6 address */
         size_t in6_addr_len = sizeof(struct in6_addr);
+        addr.addr6.sin6_family = AF_INET6;
         memcpy(&addr.addr6.sin6_addr, req->addr, in6_addr_len);
         memcpy(&addr.addr6.sin6_port, req->addr + in6_addr_len, portlen);
 
@@ -252,8 +294,9 @@ request_start(struct client_context *client, char *buf, ssize_t buflen) {
     }
 
     char host[256] = {0};
+    int host_is_ip = 0;
     int addrlen = analyse_request_addr(request, &remote->addr,
-                                       client->target_addr, host);
+                                       client->target_addr, host, &host_is_ip);
     if (addrlen < 1) {
         logger_log(LOG_ERR, "unsupported address type: 0x%02x", request->atyp);
         request_ack(client, S5_REP_ADDRESS_TYPE_NOT_SUPPORTED);
@@ -263,11 +306,15 @@ request_start(struct client_context *client, char *buf, ssize_t buflen) {
     uint16_t *portbuf; // avoid Wstrict-aliasing
     switch (request->atyp) {
         case S5_ATYP_HOST:
+            if (host_is_ip) {
+                goto CONNECT;
+            }
             portbuf = ((uint16_t *)(request->addr + addrlen));
             resolve_remote(remote, host, *portbuf);
             break;
         case S5_ATYP_IPV4:
         case S5_ATYP_IPV6:
+CONNECT:
             if (verbose) {
                 logger_log(LOG_INFO, "connect to %s", client->target_addr);
             }

@@ -44,8 +44,9 @@ ifdef CROSS_COMPILE
 CPPFLAGS = -DCROSS_COMPILE
 endif
 
+CC = clang
 CFLAGS = \
-	-Os	\
+	-O2 \
 	-g \
 	-std=gnu99 \
 	-Wall \
@@ -77,7 +78,7 @@ all: libuv udns socksd
 	$(Q)git submodule update --init
 
 3rd/libuv/Makefile: | 3rd/libuv/autogen.sh
-	$(Q)cd 3rd/libuv && ./autogen.sh && ./configure --host=$(HOST) LDFLAGS= && $(MAKE)
+	$(Q)cd 3rd/libuv && ./autogen.sh && ./configure --host=$(HOST) CC=clang CFLAGS="-O2 -fPIC" LDFLAGS=-fPIC && $(MAKE)
 
 libuv: 3rd/libuv/Makefile
 
@@ -85,7 +86,7 @@ libuv: 3rd/libuv/Makefile
 	$(Q)git submodule update --init
 
 3rd/udns/Makefile: | 3rd/udns/configure
-	$(Q)cd 3rd/udns && ./configure && $(MAKE)
+	$(Q)cd 3rd/udns && CC=clang CFLAGS=-O2 ./configure && $(MAKE)
 
 udns: 3rd/udns/Makefile
 

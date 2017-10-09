@@ -20,7 +20,7 @@ endif
 # Include the make variables (CC, etc...)
 #
 AS	= $(CROSS_COMPILE)as
-CC	= $(CROSS_COMPILE)gcc
+CC	= $(CROSS_COMPILE)clang
 LD	= $(CROSS_COMPILE)ld
 CPP	= $(CC) -E
 AR	= $(CROSS_COMPILE)ar
